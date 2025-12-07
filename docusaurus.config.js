@@ -10,8 +10,8 @@ import {themes as prismThemes} from 'prism-react-renderer';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'My Site',
-  tagline: 'Dinosaurs are cool',
+  title: 'Physical AI & Humanoid Robotics',
+  tagline: 'A comprehensive textbook on embodied intelligence and humanoid robotics',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -51,6 +51,7 @@ const config = {
           // Remove this to remove the "edit this page" links.
           editUrl:
             'https://github.com/facebook/docusaurus/tree/main/packages/create-docusaurus/templates/shared/',
+          routeBasePath: '/', // Serve the docs at the site's root
         },
         blog: {
           showReadingTime: true,
@@ -83,21 +84,20 @@ const config = {
         respectPrefersColorScheme: true,
       },
       navbar: {
-        title: 'My Site',
+        title: 'Physical AI & Humanoid Robotics',
         logo: {
-          alt: 'My Site Logo',
+          alt: 'Physical AI & Humanoid Robotics Logo',
           src: 'img/logo.svg',
         },
         items: [
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'textbookSidebar',
             position: 'left',
-            label: 'Tutorial',
+            label: 'Textbook',
           },
-          {to: '/blog', label: 'Blog', position: 'left'},
           {
-            href: 'https://github.com/facebook/docusaurus',
+            href: 'https://github.com/NabeelManjhoti/physical-ai-book',
             label: 'GitHub',
             position: 'right',
           },
@@ -107,11 +107,15 @@ const config = {
         style: 'dark',
         links: [
           {
-            title: 'Docs',
+            title: 'Textbook',
             items: [
               {
-                label: 'Tutorial',
-                to: '/docs/intro',
+                label: 'Author Introduction',
+                to: '/docs/author-introduction',
+              },
+              {
+                label: 'Table of Contents',
+                to: '/docs/introduction-to-embodied-intelligence',
               },
             ],
           },
@@ -136,17 +140,13 @@ const config = {
             title: 'More',
             items: [
               {
-                label: 'Blog',
-                to: '/blog',
-              },
-              {
                 label: 'GitHub',
-                href: 'https://github.com/facebook/docusaurus',
+                href: 'https://github.com/NabeelManjhoti/physical-ai-book',
               },
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} My Project, Inc. Built with Docusaurus.`,
+        copyright: `Copyright © ${new Date().getFullYear()} Physical AI & Humanoid Robotics. Built with Docusaurus.`,
       },
       prism: {
         theme: prismThemes.github,

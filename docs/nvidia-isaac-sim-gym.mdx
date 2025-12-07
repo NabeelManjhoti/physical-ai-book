@@ -1,0 +1,672 @@
+---
+sidebar_position: 5
+title: "NVIDIA Isaac Sim & Gym (Reinforcement Learning)"
+---
+
+# NVIDIA Isaac Sim & Gym (Reinforcement Learning)
+
+## Isaac Sim Environment Setup
+
+NVIDIA Isaac Sim is a comprehensive robotics simulation application and framework based on NVIDIA Omniverse technology. It provides high-fidelity physics simulation, realistic rendering, and advanced AI training capabilities for robotics applications.
+
+### Installation and Prerequisites
+
+Isaac Sim requires specific system requirements and dependencies:
+
+```bash
+# System requirements
+# - NVIDIA GPU with RTX or GTX 1080/2080/3080/4090 series
+# - CUDA 11.8 or later
+# - Ubuntu 20.04 LTS or Windows 10/11
+# - At least 16GB RAM, 200GB free disk space
+
+# Download Isaac Sim from NVIDIA Developer website
+# Follow the installation guide for your platform
+```
+
+### Basic Setup and Launch
+
+```bash
+# Launch Isaac Sim
+./isaac-sim.python.sh
+
+# Or using Docker (recommended)
+docker run --gpus all -it --rm \
+  --network=host \
+  --env "ACCEPT_EULA=Y" \
+  --env "NVIDIA_VISIBLE_DEVICES=all" \
+  --volume $(pwd)/isaac-sim-cache:/isaac-sim/kit/cache:rw \
+  --volume $(pwd)/isaac-sim-logs:/isaac-sim/logs:rw \
+  --volume $(pwd)/isaac-sim-assets:/isaac-sim/assets:rw \
+  nvcr.io/nvidia/isaac-sim:4.0.0
+```
+
+### Isaac Sim Python API
+
+```python
+# Initialize Isaac Sim
+from omni.isaac.kit import SimulationApp
+
+# Configure the simulation app
+config = {
+    "headless": False,  # Set to True for headless mode
+    "enable_cameras": True,
+    "window_width": 1280,
+    "window_height": 720,
+}
+
+simulation_app = SimulationApp(config)
+
+# Import required modules
+from omni.isaac.core import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.utils.nucleus import get_assets_root_path
+from omni.isaac.core.utils.viewports import set_camera_view
+
+# Create a world instance
+world = World(stage_units_in_meters=1.0)
+
+# Start the simulation
+world.reset()
+simulation_app.close()
+```
+
+## Gym Integration for Reinforcement Learning
+
+### Isaac Gym Overview
+
+Isaac Gym provides GPU-accelerated robotics environments for reinforcement learning, allowing thousands of parallel environments to run simultaneously on a single GPU.
+
+```python
+# Basic Isaac Gym environment setup
+import isaacgym
+from isaacgym import gymapi
+from isaacgym import gymtorch
+import torch
+
+# Initialize gym
+gym = gymapi.acquire_gym()
+
+# Configure sim
+sim_params = gymapi.SimParams()
+sim_params.up_axis = gymapi.UP_AXIS_Z
+sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.81)
+
+# Set physics parameters
+sim_params.physx.solver_type = 1
+sim_params.physx.num_position_iterations = 8
+sim_params.physx.num_velocity_iterations = 1
+sim_params.physx.num_threads = 4
+sim_params.physx.use_gpu = True
+
+# Create sim
+sim = gym.create_sim(0, 0, gymapi.SIM_PHYSX, sim_params)
+```
+
+### Creating Custom RL Environments
+
+```python
+import torch
+import numpy as np
+from isaacgym import gymapi
+from isaacgym import gymtorch
+from isaacgym.torch_utils import *
+
+class CustomRLEnv:
+    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
+        # Initialize sim
+        self.gym = gymapi.acquire_gym()
+        self.sim = self.gym.create_sim(device_id, device_id, physics_engine, sim_params)
+
+        # Set up scene
+        self._create_ground_plane()
+        self._create_envs()
+
+        # Initialize buffers
+        self.obs_buf = torch.zeros((self.num_envs, self.cfg["env"]["numObservations"]), device=self.device, dtype=torch.float)
+        self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
+        self.actions = torch.zeros((self.num_envs, self.cfg["env"]["numActions"]), device=self.device, dtype=torch.float)
+
+    def _create_ground_plane(self):
+        plane_params = gymapi.PlaneParams()
+        plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
+        self.gym.add_ground(self.sim, plane_params)
+
+    def _create_envs(self):
+        # Load asset
+        asset_root = "path/to/robot/assets"
+        asset_file = "robot.urdf"
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.flip_visual_attachments = False
+        asset_options.collapse_fixed_joints = True
+        asset_options.disable_gravity = False
+
+        robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+
+        # Create environments
+        spacing = 2.0
+        env_lower = gymapi.Vec3(-spacing, -spacing, 0.0)
+        env_upper = gymapi.Vec3(spacing, spacing, spacing)
+
+        for i in range(self.num_envs):
+            env = self.gym.create_env(self.sim, env_lower, env_upper, 2)
+
+            # Add robot to environment
+            pose = gymapi.Transform()
+            pose.p = gymapi.Vec3(0.0, 0.0, 1.0)
+            pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
+
+            actor_handle = self.gym.create_actor(env, robot_asset, pose, "robot", i, 1, 0)
+
+            # Configure DOF properties
+            props = self.gym.get_actor_dof_properties(env, actor_handle)
+            props["driveMode"].fill(gymapi.DOF_MODE_POS)
+            props["stiffness"][:] = 400.0
+            props["damping"][:] = 80.0
+            self.gym.set_actor_dof_properties(env, actor_handle, props)
+```
+
+## Training Environments
+
+### Environment Configuration
+
+```python
+# Example configuration for a humanoid robot training environment
+class HumanoidRLEnv:
+    def __init__(self):
+        # Environment parameters
+        self.num_envs = 4096  # Number of parallel environments
+        self.num_obs = 231    # Number of observations
+        self.num_actions = 21 # Number of actions (joints)
+        self.max_episode_length = 1000
+
+        # Reward parameters
+        self.rew_scales = {
+            "lin_vel_xy": 1.0,
+            "ang_vel_z": 0.1,
+            "lin_vel_z": 0.1,
+            "joint_acc": -5e-7,
+            "action_rate": -0.01,
+            "stand_still": -2.0,
+        }
+
+    def compute_observations(self):
+        # Compute observations for all environments
+        self.obs_buf[:, 0] = self.base_lin_vel[:, 0] / self.lin_vel_scale
+        self.obs_buf[:, 1] = self.base_lin_vel[:, 1] / self.lin_vel_scale
+        self.obs_buf[:, 2] = self.base_ang_vel[:, 2] / self.ang_vel_scale
+        # ... additional observation computation
+```
+
+### Reward Function Design
+
+```python
+def compute_reward(self):
+    # Track episode success metrics
+    self.rew_buf[:] = 0.0
+
+    # Reward for forward velocity
+    forward_vel_reward = self.base_lin_vel[:, 0] * self.rew_scales["lin_vel_xy"]
+    self.rew_buf += forward_vel_reward
+
+    # Penalty for angular velocity around z-axis
+    angular_vel_penalty = torch.square(self.base_ang_vel[:, 2]) * self.rew_scales["ang_vel_z"]
+    self.rew_buf -= angular_vel_penalty
+
+    # Penalty for joint acceleration
+    joint_acc_penalty = torch.sum(torch.square(self.joint_acc), dim=1) * self.rew_scales["joint_acc"]
+    self.rew_buf += joint_acc_penalty
+
+    # Penalty for action rate (smooth control)
+    action_rate_penalty = torch.sum(torch.square(self.prev_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
+    self.rew_buf += action_rate_penalty
+```
+
+## Reinforcement Learning Workflows
+
+### PPO Training Example
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions import Normal
+
+class ActorCritic(nn.Module):
+    def __init__(self, num_obs, num_actions, actor_hidden_dims, critic_hidden_dims):
+        super(ActorCritic, self).__init__()
+
+        # Actor network
+        actor_layers = []
+        actor_layers.append(nn.Linear(num_obs, actor_hidden_dims[0]))
+        actor_layers.append(nn.ELU())
+        for i in range(len(actor_hidden_dims) - 1):
+            actor_layers.append(nn.Linear(actor_hidden_dims[i], actor_hidden_dims[i+1]))
+            actor_layers.append(nn.ELU())
+        actor_layers.append(nn.Linear(actor_hidden_dims[-1], num_actions))
+        actor_layers.append(nn.Tanh())
+        self.actor = nn.Sequential(*actor_layers)
+
+        # Critic network
+        critic_layers = []
+        critic_layers.append(nn.Linear(num_obs, critic_hidden_dims[0]))
+        critic_layers.append(nn.ELU())
+        for i in range(len(critic_hidden_dims) - 1):
+            critic_layers.append(nn.Linear(critic_hidden_dims[i], critic_hidden_dims[i+1]))
+            critic_layers.append(nn.ELU())
+        critic_layers.append(nn.Linear(critic_hidden_dims[-1], 1))
+        self.critic = nn.Sequential(*critic_layers)
+
+        # Initialize parameters
+        self.actor.apply(self._init_weights)
+        self.critic.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+            nn.init.zeros_(m.bias)
+
+    def forward(self, obs):
+        action_mean = self.actor(obs)
+        value = self.critic(obs)
+        return action_mean, value
+
+    def get_action(self, obs, deterministic=False):
+        action_mean, value = self.forward(obs)
+        action_std = torch.ones_like(action_mean) * 0.5  # Fixed standard deviation
+
+        dist = Normal(action_mean, action_std)
+        if deterministic:
+            action = action_mean
+        else:
+            action = dist.sample()
+
+        log_prob = dist.log_prob(action).sum(dim=1, keepdim=True)
+        return action, log_prob, value
+
+class PPO:
+    def __init__(self, actor_critic, learning_rate=3e-4, gamma=0.99, clip_param=0.2):
+        self.actor_critic = actor_critic
+        self.optimizer = optim.Adam(actor_critic.parameters(), lr=learning_rate)
+        self.gamma = gamma
+        self.clip_param = clip_param
+
+    def update(self, obs, actions, rewards, next_obs, dones):
+        # Compute advantages
+        with torch.no_grad():
+            _, values = self.actor_critic(next_obs)
+            advantages = rewards + self.gamma * values * (1 - dones) - self.actor_critic.critic(obs)
+
+        # Compute old action log probabilities
+        old_action, old_log_prob, _ = self.actor_critic.get_action(obs)
+
+        # Optimize policy
+        for _ in range(10):  # PPO epochs
+            new_action, new_log_prob, new_value = self.actor_critic.get_action(obs)
+
+            # Compute ratio
+            ratio = torch.exp(new_log_prob - old_log_prob)
+
+            # Compute surrogate loss
+            surr1 = ratio * advantages
+            surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
+            actor_loss = -torch.min(surr1, surr2).mean()
+
+            # Compute value loss
+            value_loss = (new_value - (rewards + self.gamma * values * (1 - dones))) ** 2
+            value_loss = value_loss.mean()
+
+            # Total loss
+            total_loss = actor_loss + 0.5 * value_loss
+
+            # Update
+            self.optimizer.zero_grad()
+            total_loss.backward()
+            self.optimizer.step()
+```
+
+### Training Loop
+
+```python
+def train():
+    # Initialize environment and policy
+    env = HumanoidRLEnv()
+    policy = ActorCritic(env.num_obs, env.num_actions, [512, 256, 128], [512, 256, 128])
+    ppo = PPO(policy)
+
+    # Training loop
+    for episode in range(10000):
+        obs = env.reset()
+        total_reward = 0
+
+        for step in range(env.max_episode_length):
+            # Get action from policy
+            with torch.no_grad():
+                action, _, _ = policy.get_action(obs)
+
+            # Execute action in environment
+            next_obs, reward, done, info = env.step(action)
+
+            # Update policy
+            ppo.update(obs, action, reward, next_obs, done)
+
+            obs = next_obs
+            total_reward += reward
+
+            if done:
+                break
+
+        # Log training progress
+        print(f"Episode {episode}, Total Reward: {total_reward:.2f}")
+```
+
+## Code Blocks for Isaac Sim Commands
+
+### Isaac Sim Environment Setup
+
+```python
+# Initialize Isaac Sim environment
+from omni.isaac.core import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.utils.nucleus import get_assets_root_path
+from omni.isaac.core.utils.prims import create_prim
+from omni.isaac.core.robots import Robot
+from omni.isaac.core.objects import DynamicCuboid
+import numpy as np
+
+# Create world instance
+my_world = World(stage_units_in_meters=1.0)
+
+# Add assets to the stage
+assets_root_path = get_assets_root_path()
+if assets_root_path is None:
+    print("Could not use Isaac Sim assets. Please enable Isaac Sim Preview Extensions")
+else:
+    # Add a robot to the stage
+    my_world.scene.add(
+        Robot(
+            prim_path="/World/Robot",
+            name="my_robot",
+            usd_path=f"{assets_root_path}/Isaac/Robots/Franka/franka_instanceable.usd",
+            position=np.array([0, 0, 0]),
+            orientation=np.array([1.0, 0.0, 0.0, 0.0])
+        )
+    )
+
+    # Add objects to interact with
+    my_world.scene.add(
+        DynamicCuboid(
+            prim_path="/World/Object",
+            name="my_object",
+            position=np.array([0.5, 0.5, 0.5]),
+            size=0.1,
+            mass=0.1
+        )
+    )
+
+# Reset and step the world
+my_world.reset()
+for i in range(100):
+    my_world.step(render=True)
+
+my_world.clear()
+```
+
+### RL Environment with Isaac Sim
+
+```python
+from omni.isaac.core import World
+from omni.isaac.core.utils.prims import get_prim_at_path
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.robots import Robot
+from omni.isaac.core.objects import DynamicCuboid
+from omni.isaac.core.tasks import BaseTask
+import numpy as np
+import torch
+
+class RLTask(BaseTask):
+    def __init__(self, name, offset=None):
+        super().__init__(name=name, offset=offset)
+
+        # Episode parameters
+        self._max_episode_length = 1000
+
+        # Observations and actions
+        self._num_observations = 23
+        self._num_actions = 9
+
+        # Robot parameters
+        self._robot_positions = np.array([0.0, 0.0, 0.0])
+
+    def set_up_scene(self, scene):
+        # Add the robot to the scene
+        world = self.get_world()
+        world.scene.add(
+            Robot(
+                prim_path="/World/Robot",
+                name="my_robot",
+                usd_path="/path/to/robot.usd",
+                position=self._robot_positions
+            )
+        )
+
+        # Add goal object
+        world.scene.add(
+            DynamicCuboid(
+                prim_path="/World/Goal",
+                name="goal",
+                position=np.array([1.0, 0.0, 0.5]),
+                size=0.1,
+                mass=0.1
+            )
+        )
+
+        return super().set_up_scene(scene)
+
+    def get_observations(self):
+        # Get robot state
+        robot = self._world.scene.get_object("my_robot")
+        robot_pos = robot.get_world_pose()[0]
+        robot_vel = robot.get_linear_velocity()
+
+        # Create observation vector
+        obs = torch.tensor(
+            [robot_pos[0], robot_pos[1], robot_pos[2],
+             robot_vel[0], robot_vel[1], robot_vel[2]]
+        )
+
+        return {"obs": obs}
+
+    def pre_physics_step(self, actions):
+        # Apply actions to the robot
+        if not self._world.is_playing():
+            return
+
+        actions = torch.clamp(actions, -1.0, 1.0)
+
+        # Convert actions to robot commands
+        # This depends on your robot's control interface
+        self._world.scene.get_object("my_robot").apply_action(actions)
+
+    def get_extras(self):
+        # Return additional information for logging
+        return {}
+
+    def get_metrics(self):
+        # Return metrics for evaluation
+        return {}
+```
+
+### Isaac Sim RL Training Integration
+
+```python
+from omni.isaac.core import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from rlgpu.tasks.base.rl_task import RLTask
+from rlgpu.utils.config_utils import load_cfg
+from rlgpu.algorithms.ppo import PPO
+from rlgpu.algorithms.actor_critic import ActorCritic
+import torch
+
+def run_isaac_rl_training():
+    # Initialize Isaac Sim
+    world = World(stage_units_in_meters=1.0)
+
+    # Create RL task
+    task = RLTask(name="MyRLTask")
+    world.add_task(task)
+
+    # Load configuration
+    cfg = load_cfg("config.yaml")
+
+    # Create policy network
+    policy = ActorCritic(
+        input_dim=task.get_num_observations(),
+        output_dim=task.get_num_actions(),
+        hidden_dims=[512, 256, 128]
+    )
+
+    # Create PPO trainer
+    ppo_trainer = PPO(
+        policy=policy,
+        learning_rate=cfg["learning_rate"],
+        gamma=cfg["gamma"],
+        clip_param=cfg["clip_param"]
+    )
+
+    # Reset the world
+    world.reset()
+
+    # Training loop
+    for episode in range(cfg["num_episodes"]):
+        # Reset environment
+        obs = world.reset()
+
+        episode_reward = 0
+        for step in range(task._max_episode_length):
+            # Get action from policy
+            with torch.no_grad():
+                action = policy.get_action(obs)
+
+            # Step the environment
+            next_obs, reward, done, info = world.step(action)
+
+            # Store transition for training
+            ppo_trainer.store_transition(obs, action, reward, next_obs, done)
+
+            # Update policy
+            if step % cfg["update_frequency"] == 0:
+                ppo_trainer.update()
+
+            obs = next_obs
+            episode_reward += reward
+
+            if done:
+                break
+
+        print(f"Episode {episode}, Reward: {episode_reward:.2f}")
+
+    # Clean up
+    world.clear()
+```
+
+## Practical Examples
+
+### Fetch Robot Training Example
+
+```python
+# Training a Fetch robot to reach a target
+import numpy as np
+import torch
+import torch.nn as nn
+
+class FetchReachTask:
+    def __init__(self):
+        self.max_episode_length = 50
+        self.action_scale = 2.0
+        self.dist_reward_scale = 2.0
+        self.success_tolerance = 0.05
+
+    def reset(self):
+        # Reset robot and target positions
+        self.robot_pos = np.random.uniform(-0.5, 0.5, size=2)
+        self.target_pos = np.random.uniform(-0.5, 0.5, size=2)
+
+        # Compute initial observation
+        obs = np.concatenate([self.robot_pos, self.target_pos, [0, 0]])  # Include velocities
+        return obs
+
+    def step(self, action):
+        # Apply action to robot
+        action = np.clip(action, -1, 1) * self.action_scale
+        self.robot_pos += action * 0.02  # Small step size
+
+        # Compute reward
+        dist_to_target = np.linalg.norm(self.robot_pos - self.target_pos)
+        reward = -dist_to_target * self.dist_reward_scale
+
+        # Check for success
+        done = dist_to_target < self.success_tolerance
+        if done:
+            reward += 100  # Success bonus
+
+        # Compute next observation
+        obs = np.concatenate([self.robot_pos, self.target_pos, action])  # Include velocities
+        return obs, reward, done, {}
+```
+
+### Humanoid Walking Training
+
+```python
+# Training a humanoid to walk forward
+import numpy as np
+import torch
+
+class HumanoidWalkTask:
+    def __init__(self):
+        self.max_episode_length = 1000
+        self.target_velocity = 1.0  # m/s
+        self.velocity_reward_weight = 1.0
+        self.energy_penalty_weight = 0.001
+        self.joint_deviation_penalty_weight = 0.1
+
+    def compute_reward(self, current_velocity, joint_positions, joint_velocities):
+        # Reward for achieving target velocity
+        velocity_reward = -abs(current_velocity - self.target_velocity) * self.velocity_reward_weight
+
+        # Penalty for excessive joint velocities (energy efficiency)
+        energy_penalty = -np.sum(np.square(joint_velocities)) * self.energy_penalty_weight
+
+        # Penalty for deviating from nominal joint positions
+        nominal_positions = np.zeros_like(joint_positions)  # Define nominal positions
+        joint_deviation_penalty = -np.sum(np.square(joint_positions - nominal_positions)) * self.joint_deviation_penalty_weight
+
+        total_reward = velocity_reward + energy_penalty + joint_deviation_penalty
+        return total_reward
+```
+
+## Best Practices
+
+1. **Start Simple**: Begin with basic tasks and gradually increase complexity
+2. **Proper Scaling**: Normalize observations and scale actions appropriately
+3. **Reward Shaping**: Design rewards that guide learning toward desired behavior
+4. **Environment Randomization**: Vary environment parameters to improve generalization
+5. **Physics Parameters**: Tune physics settings for stable simulation
+6. **Parallel Environments**: Use multiple parallel environments for efficient training
+7. **Monitoring**: Track training metrics and visualize performance
+8. **Transfer Learning**: Validate policies in simulation before real-world deployment
+
+## Troubleshooting Common Issues
+
+- **NaN Values**: Check for numerical instabilities in reward computation
+- **Unstable Training**: Reduce learning rate or adjust reward scaling
+- **Simulation Instability**: Tune physics parameters (time step, solver iterations)
+- **Memory Issues**: Reduce batch size or number of parallel environments
+- **Slow Convergence**: Adjust network architecture or hyperparameters
+
+## Summary
+
+NVIDIA Isaac Sim and Gym provide powerful tools for reinforcement learning in robotics. The combination of high-fidelity physics simulation and parallel training environments enables efficient learning of complex robotic behaviors. Proper environment design, reward shaping, and training workflows are essential for successful RL applications in robotics.

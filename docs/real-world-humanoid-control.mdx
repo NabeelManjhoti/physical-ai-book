@@ -1,0 +1,805 @@
+---
+sidebar_position: 6
+title: "Real-World Humanoid Control"
+---
+
+# Real-World Humanoid Control
+
+## Hardware Integration
+
+### Humanoid Robot Platforms
+
+Humanoid robots represent one of the most complex and challenging areas of robotics, requiring sophisticated control systems to achieve stable locomotion and manipulation in human environments. Several commercial and research platforms are available for humanoid robotics:
+
+#### Popular Humanoid Platforms
+
+1. **Boston Dynamics Atlas**
+   - Hydraulically actuated
+   - Advanced dynamic locomotion capabilities
+   - Research platform for complex tasks
+
+2. **Honda ASIMO**
+   - Electrically actuated
+   - Pioneering humanoid with advanced walking
+   - Focus on human interaction
+
+3. **SoftBank Pepper/Nao**
+   - Smaller humanoid platforms
+   - Focus on social interaction
+   - Educational and research applications
+
+4. **PAL Robotics REEM/REEM-C**
+   - Electric actuation
+   - Service robotics applications
+   - Modular design approach
+
+5. **ROBOTIS OP3/Dreamer**
+   - Affordable research platform
+   - ROS-based control system
+   - Open-source software
+
+### Actuator Technologies
+
+Humanoid robots require precise and responsive actuators to achieve human-like movement:
+
+#### Servo Motor Systems
+```cpp
+// Example servo control for humanoid joints
+#include <ros/ros.h>
+#include <std_msgs/Float64.h>
+#include <sensor_msgs/JointState.h>
+
+class HumanoidController {
+private:
+    ros::NodeHandle nh;
+    std::vector<ros::Publisher> joint_publishers;
+    std::vector<ros::Subscriber> joint_subscribers;
+    std::vector<double> joint_positions;
+    std::vector<double> joint_velocities;
+    std::vector<double> joint_efforts;
+
+public:
+    HumanoidController() {
+        // Initialize publishers for each joint
+        joint_publishers.push_back(nh.advertise<std_msgs::Float64>("/left_hip_joint/command", 1));
+        joint_publishers.push_back(nh.advertise<std_msgs::Float64>("/left_knee_joint/command", 1));
+        joint_publishers.push_back(nh.advertise<std_msgs::Float64>("/left_ankle_joint/command", 1));
+        // ... add more joints as needed
+
+        // Subscribe to joint states
+        joint_subscribers.push_back(nh.subscribe("/joint_states", 1, &HumanoidController::jointStateCallback, this));
+    }
+
+    void jointStateCallback(const sensor_msgs::JointState::ConstPtr& msg) {
+        // Update internal joint state
+        for (size_t i = 0; i < msg->name.size(); ++i) {
+            // Update joint positions, velocities, and efforts
+        }
+    }
+
+    void setJointPosition(const std::string& joint_name, double position) {
+        // Find the joint and send command
+        // Implementation depends on specific hardware interface
+    }
+};
+```
+
+#### Series Elastic Actuators (SEA)
+Series elastic actuators provide compliance and force control capabilities essential for safe human-robot interaction:
+
+```python
+# Force control using series elastic actuators
+import numpy as np
+
+class SEAController:
+    def __init__(self, spring_constant=1000.0, max_torque=50.0):
+        self.k = spring_constant  # Spring constant (N*m/rad)
+        self.max_torque = max_torque
+        self.desired_position = 0.0
+        self.desired_force = 0.0
+
+    def compute_torque(self, current_position, current_spring_deformation):
+        # Calculate desired spring deformation based on force control
+        desired_deformation = self.desired_force / self.k
+
+        # Position control with force feedback
+        position_error = self.desired_position - current_position
+        deformation_error = desired_deformation - current_spring_deformation
+
+        # Combined control
+        torque = 5.0 * position_error + self.k * deformation_error  # P control
+
+        # Limit torque output
+        torque = np.clip(torque, -self.max_torque, self.max_torque)
+
+        return torque
+```
+
+## Control Systems for Humanoid Robots
+
+### Hierarchical Control Architecture
+
+Humanoid control systems typically employ a hierarchical structure with multiple control layers:
+
+#### High-Level Motion Planning
+```python
+# High-level motion planner
+import numpy as np
+from scipy import interpolate
+
+class MotionPlanner:
+    def __init__(self):
+        self.trajectory = []
+        self.current_waypoint = 0
+
+    def plan_walking_trajectory(self, start_pos, goal_pos, step_height=0.1, step_length=0.3):
+        """Plan a walking trajectory between start and goal positions"""
+        # Calculate number of steps needed
+        distance = np.linalg.norm(np.array(goal_pos[:2]) - np.array(start_pos[:2]))
+        num_steps = int(distance / step_length) + 1
+
+        trajectory = []
+        for i in range(num_steps + 1):
+            # Interpolate position
+            t = i / num_steps
+            x = start_pos[0] + t * (goal_pos[0] - start_pos[0])
+            y = start_pos[1] + t * (goal_pos[1] - start_pos[1])
+            z = start_pos[2]  # Maintain height
+
+            # Add step motion for foot
+            if i % 2 == 0:  # Left foot step
+                foot_pos = [x, y, z + step_height if i > 0 and i < num_steps else z]
+            else:  # Right foot step
+                foot_pos = [x, y, z]
+
+            trajectory.append({
+                'time': i * 0.5,  # 0.5 seconds per step
+                'position': [x, y, z],
+                'left_foot': foot_pos if i % 2 == 0 else [x, y, z],
+                'right_foot': foot_pos if i % 2 == 1 else [x, y, z]
+            })
+
+        return trajectory
+```
+
+#### Balance Control (Zero Moment Point - ZMP)
+```python
+# ZMP-based balance controller
+class ZMPController:
+    def __init__(self, robot_height=0.8, sampling_time=0.01):
+        self.robot_height = robot_height
+        self.sampling_time = sampling_time
+        self.omega = np.sqrt(9.81 / robot_height)  # Natural frequency
+        self.com_x = 0.0
+        self.com_y = 0.0
+        self.desired_zmp_x = 0.0
+        self.desired_zmp_y = 0.0
+
+    def update_com_position(self, measured_zmp_x, measured_zmp_y):
+        """Update center of mass position based on ZMP feedback"""
+        # ZMP feedback control law
+        com_x_dbl_dot = self.omega**2 * (self.com_x - self.desired_zmp_x)
+        com_y_dbl_dot = self.omega**2 * (self.com_y - self.desired_zmp_y)
+
+        # Integrate acceleration to get velocity and position
+        # (simplified - in practice, use proper numerical integration)
+        self.com_x += self.sampling_time * com_x_dbl_dot
+        self.com_y += self.sampling_time * com_y_dbl_dot
+
+        return self.com_x, self.com_y
+
+    def compute_foot_placement(self, support_foot, current_time):
+        """Compute appropriate foot placement for balance"""
+        # Simple preview control for foot placement
+        # Based on desired ZMP trajectory
+        foot_x = self.desired_zmp_x
+        foot_y = self.desired_zmp_y
+
+        # Adjust for support polygon
+        if support_foot == "left":
+            foot_y += 0.1  # Offset for left foot
+        else:
+            foot_y -= 0.1  # Offset for right foot
+
+        return foot_x, foot_y
+```
+
+#### Joint-Level Control
+```cpp
+// Joint-level PID controller
+class JointController {
+private:
+    double kp, ki, kd;  // PID gains
+    double error_sum, last_error;
+    double max_integral, min_integral;
+    double max_output, min_output;
+
+public:
+    JointController(double p, double i, double d,
+                   double max_int = 10.0, double min_int = -10.0,
+                   double max_out = 100.0, double min_out = -100.0) :
+        kp(p), ki(i), kd(d), error_sum(0.0), last_error(0.0),
+        max_integral(max_int), min_integral(min_int),
+        max_output(max_out), min_output(min_out) {}
+
+    double compute_output(double desired_position, double current_position, double dt) {
+        double error = desired_position - current_position;
+
+        // Proportional term
+        double p_term = kp * error;
+
+        // Integral term
+        error_sum += error * dt;
+        error_sum = std::clamp(error_sum, min_integral, max_integral);
+        double i_term = ki * error_sum;
+
+        // Derivative term
+        double derivative = (error - last_error) / dt;
+        double d_term = kd * derivative;
+
+        last_error = error;
+
+        double output = p_term + i_term + d_term;
+        output = std::clamp(output, min_output, max_output);
+
+        return output;
+    }
+
+    void reset() {
+        error_sum = 0.0;
+        last_error = 0.0;
+    }
+};
+```
+
+### Walking Pattern Generation
+
+```python
+# Walking pattern generator using inverted pendulum model
+import numpy as np
+from scipy.signal import butter, filtfilt
+
+class WalkingPatternGenerator:
+    def __init__(self, step_height=0.05, step_length=0.3, step_time=0.8, com_height=0.8):
+        self.step_height = step_height
+        self.step_length = step_length
+        self.step_time = step_time
+        self.com_height = com_height
+        self.omega = np.sqrt(9.81 / com_height)
+
+    def generate_foot_trajectory(self, start_pos, num_steps, step_phase):
+        """Generate smooth foot trajectory for walking"""
+        # Calculate foot position based on step phase (0 to 1)
+        t = step_phase  # Normalized time (0 to 1)
+
+        # Horizontal movement (cubic interpolation)
+        x = start_pos[0] + self.step_length * t
+        y = start_pos[1]
+
+        # Vertical movement (sinusoidal for smooth lift and place)
+        z = start_pos[2]
+        if t < 0.3:  # Lift phase (30% of step)
+            z_lift = self.step_height * np.sin(np.pi * t / 0.3)
+            z += z_lift
+        elif t > 0.7:  # Place phase (last 30% of step)
+            z_place = self.step_height * np.sin(np.pi * (1 - t) / 0.3)
+            z += z_place
+
+        return [x, y, z]
+
+    def generate_com_trajectory(self, start_pos, goal_pos, current_time, total_time):
+        """Generate center of mass trajectory for balance"""
+        # Use 5th order polynomial for smooth CoM movement
+        t = current_time / total_time
+        t = np.clip(t, 0, 1)
+
+        # 5th order polynomial coefficients for smooth start/end
+        poly_coeffs = [
+            0,      # t^0
+            0,      # t^1
+            0,      # t^2
+            10,     # t^3
+            -15,    # t^4
+            6       # t^5
+        ]
+
+        scale_factor = np.polyval(poly_coeffs, t)
+
+        com_x = start_pos[0] + scale_factor * (goal_pos[0] - start_pos[0])
+        com_y = start_pos[1] + scale_factor * (goal_pos[1] - start_pos[1])
+        com_z = start_pos[2]  # Maintain relatively constant height
+
+        return [com_x, com_y, com_z]
+```
+
+## Sensor Integration and Feedback
+
+### Sensor Types and Fusion
+
+Humanoid robots rely on various sensors for perception and control:
+
+#### Inertial Measurement Units (IMU)
+```python
+# IMU-based state estimation
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+class IMUStateEstimator:
+    def __init__(self):
+        self.orientation = R.identity()
+        self.angular_velocity = np.zeros(3)
+        self.linear_acceleration = np.zeros(3)
+        self.gravity = np.array([0, 0, -9.81])
+
+    def update_from_imu(self, gyro_data, accel_data, dt):
+        """Update state estimate using IMU data"""
+        # Update angular velocity
+        self.angular_velocity = gyro_data
+
+        # Integrate gyroscope data for orientation
+        angular_velocity_norm = np.linalg.norm(self.angular_velocity)
+        if angular_velocity_norm > 1e-6:  # Avoid division by zero
+            rotation_axis = self.angular_velocity / angular_velocity_norm
+            rotation_angle = angular_velocity_norm * dt
+            rotation_quat = R.from_rotvec(rotation_axis * rotation_angle)
+            self.orientation = self.orientation * rotation_quat
+
+        # Remove gravity from accelerometer data
+        R_world_imu = self.orientation.as_matrix()
+        gravity_world = R_world_imu @ self.gravity
+        self.linear_acceleration = accel_data - gravity_world
+
+        return self.orientation, self.linear_acceleration
+```
+
+#### Force/Torque Sensors
+```python
+# Force sensor processing for contact detection
+class ForceSensorProcessor:
+    def __init__(self, threshold=50.0):  # 50N threshold for contact
+        self.contact_threshold = threshold
+        self.left_foot_force = 0.0
+        self.right_foot_force = 0.0
+
+    def detect_contact(self, left_force, right_force):
+        """Detect contact with ground using force sensors"""
+        left_contact = left_force > self.contact_threshold
+        right_contact = right_force > self.contact_threshold
+
+        return left_contact, right_contact
+
+    def compute_cop(self, force_vector, moment_vector, sensor_position):
+        """Compute center of pressure from 6-axis force/torque sensor"""
+        # COP = position + (moment x force) / ||force||^2
+        if np.linalg.norm(force_vector) > 1e-6:  # Avoid division by zero
+            cop = sensor_position + np.cross(moment_vector, force_vector) / np.dot(force_vector, force_vector)
+            return cop
+        else:
+            return sensor_position
+```
+
+### Sensor Fusion
+```python
+# Kalman filter for state estimation
+class StateEstimator:
+    def __init__(self):
+        # State: [x, y, z, vx, vy, vz, roll, pitch, yaw]
+        self.state = np.zeros(9)
+        self.covariance = np.eye(9) * 1000  # Initial uncertainty
+
+        # Process noise
+        self.Q = np.eye(9) * 0.1
+
+        # Measurement noise
+        self.R = np.eye(6) * 1.0  # For 6DOF measurements
+
+    def predict(self, dt):
+        """Prediction step of Kalman filter"""
+        # Simple linear motion model
+        F = np.eye(9)
+        F[0:3, 3:6] = np.eye(3) * dt  # Position from velocity
+
+        # Predict state
+        self.state = F @ self.state
+
+        # Predict covariance
+        self.covariance = F @ self.covariance @ F.T + self.Q
+
+    def update(self, measurement):
+        """Update step with measurement"""
+        # Measurement matrix (we can measure position and orientation)
+        H = np.zeros((6, 9))
+        H[0:3, 0:3] = np.eye(3)  # Position measurement
+        H[3:6, 6:9] = np.eye(3)  # Orientation measurement
+
+        # Innovation
+        y = measurement - H @ self.state
+
+        # Innovation covariance
+        S = H @ self.covariance @ H.T + self.R
+
+        # Kalman gain
+        K = self.covariance @ H.T @ np.linalg.inv(S)
+
+        # Update state and covariance
+        self.state = self.state + K @ y
+        self.covariance = (np.eye(9) - K @ H) @ self.covariance
+```
+
+## Safety Considerations
+
+### Fall Prevention and Recovery
+
+```python
+# Fall detection and prevention
+class FallPrevention:
+    def __init__(self, com_height_threshold=0.3, angle_threshold=30.0):
+        self.com_height_threshold = com_height_threshold  # meters
+        self.angle_threshold = np.radians(angle_threshold)  # radians
+        self.recovery_active = False
+
+    def detect_fall_risk(self, com_position, robot_orientation, angular_velocity):
+        """Detect potential fall based on CoM position and orientation"""
+        # Check if CoM is too low (potential fall)
+        com_low = com_position[2] < self.com_height_threshold
+
+        # Check orientation angles (roll and pitch)
+        rpy = robot_orientation.as_euler('xyz')
+        orientation_risky = (abs(rpy[0]) > self.angle_threshold or
+                            abs(rpy[1]) > self.angle_threshold)
+
+        # Check angular velocity (too fast rotation)
+        angular_speed = np.linalg.norm(angular_velocity)
+        rotation_risky = angular_speed > 2.0  # rad/s threshold
+
+        return com_low or orientation_risky or rotation_risky
+
+    def execute_fall_recovery(self, robot_controller):
+        """Execute fall recovery sequence"""
+        if not self.recovery_active:
+            self.recovery_active = True
+
+            # Sequence: 1) Reduce joint stiffness, 2) Prepare for impact, 3) Get up
+            robot_controller.set_joint_impedance(0.1, 0.1)  # Low stiffness
+            robot_controller.move_to_safe_posture()
+
+            # After impact, attempt to get up
+            # ... implementation depends on robot design
+```
+
+### Emergency Stop System
+
+```python
+# Emergency stop implementation
+class EmergencyStop:
+    def __init__(self):
+        self.emergency_stop_active = False
+        self.safety_zones = []  # Define safety perimeters
+
+    def check_safety_conditions(self, robot_position, obstacles):
+        """Check if robot is in unsafe condition"""
+        # Check proximity to obstacles
+        for obstacle in obstacles:
+            distance = np.linalg.norm(robot_position - obstacle.position)
+            if distance < obstacle.safety_radius:
+                return True  # Emergency stop needed
+
+        # Check joint limits
+        # Check temperature limits
+        # Check power consumption
+
+        return False
+
+    def activate_emergency_stop(self, robot_controller):
+        """Activate emergency stop and bring robot to safe state"""
+        self.emergency_stop_active = True
+        robot_controller.stop_all_motors()
+        robot_controller.move_to_home_position()
+```
+
+## Deployment Strategies
+
+### Real-time Control Considerations
+
+```cpp
+// Real-time control loop implementation
+#include <chrono>
+#include <thread>
+
+class RealTimeController {
+private:
+    std::chrono::high_resolution_clock::time_point last_time;
+    double control_period;  // seconds
+    bool running;
+
+public:
+    RealTimeController(double freq) : control_period(1.0/freq), running(false) {}
+
+    void run_control_loop() {
+        running = true;
+        last_time = std::chrono::high_resolution_clock::now();
+
+        while (running) {
+            auto current_time = std::chrono::high_resolution_clock::now();
+            double dt = std::chrono::duration<double>(current_time - last_time).count();
+
+            if (dt >= control_period) {
+                // Execute control cycle
+                execute_control_cycle();
+
+                last_time = current_time;
+
+                // Compensate for execution time
+                double execution_time = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - current_time).count();
+                if (execution_time < control_period) {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(control_period - execution_time));
+                }
+            } else {
+                // Small sleep to prevent busy waiting
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+        }
+    }
+
+    void execute_control_cycle() {
+        // Read sensor data
+        read_sensors();
+
+        // Update state estimation
+        update_state_estimation();
+
+        // Execute high-level planning
+        update_motion_plan();
+
+        // Compute low-level joint commands
+        compute_joint_commands();
+
+        // Send commands to actuators
+        send_commands();
+    }
+};
+```
+
+### Hardware-in-the-Loop Testing
+
+```python
+# Hardware-in-the-loop simulation
+class HILSimulator:
+    def __init__(self, robot_interface, simulation_model):
+        self.robot_interface = robot_interface
+        self.sim_model = simulation_model
+        self.delay_compensation = 0.01  # 10ms communication delay
+
+    def run_hil_test(self, test_trajectory):
+        """Run hardware-in-the-loop test"""
+        for t, desired_state in enumerate(test_trajectory):
+            # Get actual robot state
+            actual_state = self.robot_interface.get_state()
+
+            # Update simulation with actual state
+            sim_state = self.sim_model.update_with_real_data(actual_state, t)
+
+            # Compare simulation vs actual for validation
+            state_error = sim_state - actual_state
+
+            # Log data for analysis
+            self.log_data(t, desired_state, actual_state, state_error)
+
+            # Send next command
+            next_command = self.compute_next_command(desired_state, actual_state)
+            self.robot_interface.send_command(next_command, t + self.delay_compensation)
+```
+
+## Code Blocks for Control Commands
+
+### ROS 2 Control Interface
+
+```python
+# ROS 2 interface for humanoid control
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+from geometry_msgs.msg import Twist
+from control_msgs.msg import JointTrajectoryControllerState
+
+class HumanoidROSController(Node):
+    def __init__(self):
+        super().__init__('humanoid_controller')
+
+        # Publishers
+        self.joint_cmd_pub = self.create_publisher(Float64MultiArray, '/joint_commands', 10)
+        self.velocity_cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # Subscribers
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states', self.joint_state_callback, 10)
+        self.controller_state_sub = self.create_subscription(
+            JointTrajectoryControllerState, '/controller_state', self.controller_state_callback, 10)
+
+        # Timer for control loop
+        self.control_timer = self.create_timer(0.01, self.control_loop)  # 100Hz
+
+        self.joint_positions = []
+        self.joint_velocities = []
+        self.joint_efforts = []
+
+    def joint_state_callback(self, msg):
+        """Callback for joint state updates"""
+        self.joint_positions = list(msg.position)
+        self.joint_velocities = list(msg.velocity)
+        self.joint_efforts = list(msg.effort)
+
+    def controller_state_callback(self, msg):
+        """Callback for controller state"""
+        # Process controller feedback
+        pass
+
+    def control_loop(self):
+        """Main control loop"""
+        # Get desired joint positions (from high-level planner)
+        desired_positions = self.compute_desired_positions()
+
+        # Package and send commands
+        cmd_msg = Float64MultiArray()
+        cmd_msg.data = desired_positions
+        self.joint_cmd_pub.publish(cmd_msg)
+
+    def compute_desired_positions(self):
+        """Compute desired joint positions based on current task"""
+        # Implementation depends on specific task
+        # This is where inverse kinematics, walking pattern generation, etc. would occur
+        return [0.0] * len(self.joint_positions)  # Placeholder
+```
+
+### Walking Controller Implementation
+
+```cpp
+// Walking controller with balance feedback
+#include <vector>
+#include <cmath>
+
+class WalkingController {
+private:
+    std::vector<double> left_foot_pos;
+    std::vector<double> right_foot_pos;
+    std::vector<double> com_pos;
+    double step_length;
+    double step_height;
+    double step_duration;
+    double current_phase;
+    bool left_support;
+
+public:
+    WalkingController() : step_length(0.3), step_height(0.05), step_duration(0.8),
+                         current_phase(0.0), left_support(true) {
+        left_foot_pos = {0.0, 0.1, 0.0};
+        right_foot_pos = {0.0, -0.1, 0.0};
+        com_pos = {0.0, 0.0, 0.8};
+    }
+
+    void update_walking(double dt) {
+        // Update walking phase
+        current_phase += dt / step_duration;
+        if (current_phase >= 1.0) {
+            current_phase = 0.0;
+            left_support = !left_support;  // Switch support foot
+        }
+
+        // Update foot positions based on walking phase
+        update_foot_positions();
+
+        // Update CoM for balance
+        update_com_position();
+    }
+
+    void update_foot_positions() {
+        // Calculate foot positions based on walking phase
+        double phase = current_phase;
+
+        // Swing foot trajectory
+        if (left_support) {
+            // Right foot is swinging
+            right_foot_pos[0] = phase * step_length;  // Move forward
+            right_foot_pos[2] = (phase < 0.5) ? step_height * std::sin(M_PI * phase * 2) : 0;  // Lift and place
+        } else {
+            // Left foot is swinging
+            left_foot_pos[0] = phase * step_length;  // Move forward
+            left_foot_pos[2] = (phase < 0.5) ? step_height * std::sin(M_PI * phase * 2) : 0;  // Lift and place
+        }
+    }
+
+    void update_com_position() {
+        // Simple balance control - keep CoM between feet
+        double support_width = std::abs(left_foot_pos[1] - right_foot_pos[1]);
+        double target_y = (left_support) ? right_foot_pos[1] : left_foot_pos[1];
+
+        // Simple PD control to keep CoM over support foot
+        double y_error = target_y - com_pos[1];
+        com_pos[1] += 0.1 * y_error * 0.01;  // Simple control with dt factor
+    }
+
+    std::vector<std::vector<double>> get_target_positions() {
+        return {left_foot_pos, right_foot_pos, com_pos};
+    }
+};
+```
+
+### Balance Control with Capture Point
+
+```python
+# Capture Point based balance control
+import numpy as np
+
+class CapturePointController:
+    def __init__(self, com_height=0.85, gravity=9.81):
+        self.com_height = com_height
+        self.gravity = gravity
+        self.omega = np.sqrt(gravity / com_height)
+        self.current_com_pos = np.array([0.0, 0.0])
+        self.current_com_vel = np.array([0.0, 0.0])
+
+    def compute_capture_point(self):
+        """Compute the capture point from current CoM state"""
+        # Capture Point = CoM position + CoM velocity / omega
+        capture_point = self.current_com_pos + self.current_com_vel / self.omega
+        return capture_point
+
+    def compute_foot_placement(self, com_pos, com_vel):
+        """Compute where to place the foot to stop the robot"""
+        current_cp = self.compute_capture_point()
+
+        # For stopping, place foot at capture point
+        foot_placement = current_cp
+
+        # For walking, adjust based on step parameters
+        # Add logic for step timing and placement
+
+        return foot_placement
+
+    def update_balance(self, measured_com_pos, measured_com_vel, dt):
+        """Update balance control with new measurements"""
+        self.current_com_pos = measured_com_pos
+        self.current_com_vel = measured_com_vel
+
+        # Compute control action to move capture point to desired location
+        desired_cp = self.compute_desired_capture_point()
+        current_cp = self.compute_capture_point()
+
+        # Control law to move capture point
+        cp_error = desired_cp - current_cp
+        com_control = 1.0 * cp_error  # Simple proportional control
+
+        # Apply control to update CoM reference
+        return com_control
+
+    def compute_desired_capture_point(self):
+        """Compute where we want the capture point to be"""
+        # For balance, typically want to keep capture point
+        # within support polygon
+        # Implementation depends on current gait phase and desired motion
+        return np.array([0.0, 0.0])  # Placeholder
+```
+
+## Best Practices
+
+1. **Modular Design**: Structure control systems in modular, testable components
+2. **Safety First**: Implement multiple layers of safety checks and emergency stops
+3. **Real-time Performance**: Ensure control loops meet timing requirements
+4. **Sensor Fusion**: Combine multiple sensor sources for robust state estimation
+5. **Calibration**: Regularly calibrate sensors and actuators for accuracy
+6. **Testing**: Extensive simulation and gradual real-world testing
+7. **Documentation**: Maintain clear documentation of control parameters and behaviors
+8. **Monitoring**: Implement comprehensive logging and monitoring systems
+
+## Troubleshooting Common Issues
+
+- **Oscillations**: Adjust PID gains, check sensor noise, verify mechanical play
+- **Falling**: Improve balance control, check CoM estimation, adjust gait parameters
+- **Jittery Motion**: Increase control frequency, improve sensor filtering, check mechanical issues
+- **Drifting**: Calibrate sensors, check for bias in measurements, verify control accuracy
+- **Communication Delays**: Optimize communication protocols, implement prediction
+
+## Summary
+
+Real-world humanoid control requires sophisticated integration of hardware, sensors, and control algorithms. Success depends on careful system design, robust state estimation, and appropriate safety measures. The hierarchical control approach, combining high-level planning with low-level execution, provides a framework for achieving stable and capable humanoid robot behaviors.
