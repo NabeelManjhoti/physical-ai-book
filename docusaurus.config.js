@@ -14,6 +14,9 @@ const config = {
   tagline: 'A comprehensive textbook on embodied intelligence and humanoid robotics',
   favicon: 'img/favicon.ico',
 
+  // GitHub Pages deployment configuration
+  trailingSlash: false,
+
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
     v4: true, // Improve compatibility with the upcoming Docusaurus v4
@@ -49,8 +52,7 @@ const config = {
           sidebarPath: './sidebars.js',
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
-          editUrl:
-            'https://github.com/facebook/docusaurus/tree/main/packages/create-docusaurus/templates/shared/',
+          editUrl: 'https://github.com/NabeelManjhoti/physical-ai-book/edit/main/',
           routeBasePath: '/', // Serve the docs at the site's root
         },
         blog: {
